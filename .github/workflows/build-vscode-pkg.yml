@@ -1,0 +1,96 @@
+name: Build VS Code PKG for macOS
+
+on:
+  workflow_dispatch:  # Allows manual trigger from GitHub UI
+  push:
+    branches: [ main ]
+
+jobs:
+  build-pkg:
+    runs-on: macos-latest  # GitHub provides free macOS runners
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Download VS Code
+      run: |
+        echo "Detecting architecture..."
+        ARCH=$(uname -m)
+        if [ "$ARCH" = "arm64" ]; then
+          VSCODE_URL="https://code.visualstudio.com/sha/download?build=stable&os=darwin-arm64"
+          echo "Architecture: Apple Silicon"
+        else
+          VSCODE_URL="https://code.visualstudio.com/sha/download?build=stable&os=darwin"
+          echo "Architecture: Intel"
+        fi
+        
+        echo "Downloading VS Code..."
+        curl -L "$VSCODE_URL" -o vscode.zip
+    
+    - name: Extract VS Code
+      run: |
+        echo "Extracting VS Code..."
+        unzip -q vscode.zip
+        ls -la
+    
+    - name: Create package structure
+      run: |
+        echo "Creating package structure..."
+        mkdir -p root/Applications
+        mv "Visual Studio Code.app" root/Applications/
+    
+    - name: Create post-install script
+      run: |
+        echo "Creating post-install script..."
+        mkdir -p scripts
+        
+        cat > scripts/postinstall << 'EOF'
+        #!/bin/bash
+        
+        # Set correct permissions
+        chown -R root:wheel "/Applications/Visual Studio Code.app"
+        chmod -R 755 "/Applications/Visual Studio Code.app"
+        
+        # Create symlink to code command
+        if [ ! -L "/usr/local/bin/code" ]; then
+            mkdir -p /usr/local/bin
+            ln -sf "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" /usr/local/bin/code
+        fi
+        
+        echo "VS Code installation completed successfully"
+        exit 0
+        EOF
+        
+        chmod +x scripts/postinstall
+    
+    - name: Build PKG
+      run: |
+        echo "Building .pkg installer..."
+        pkgbuild --root root \
+                 --scripts scripts \
+                 --identifier com.microsoft.VSCode \
+                 --version 1.0 \
+                 --install-location / \
+                 VSCode-Installer.pkg
+        
+        echo "Package created successfully!"
+        ls -lh VSCode-Installer.pkg
+    
+    - name: Upload PKG as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: vscode-pkg-installer
+        path: VSCode-Installer.pkg
+        retention-days: 30
+    
+    - name: Create Release (optional)
+      if: github.ref == 'refs/heads/main'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v1.0-${{ github.run_number }}
+        name: VS Code Installer v1.0-${{ github.run_number }}
+        files: VSCode-Installer.pkg
+        draft: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
